@@ -10,11 +10,11 @@ class OperationsPipeline:
         self.model_path = model_path
 
     def auto_retrain(self, data_path):
-        print(f"🔄 initiating model rebuild on {data_path}...")
+        print(f"initiating model rebuild on {data_path}...")
         df = pd.read_csv(data_path)
 
         # --- 1. DATA CLEANING & FEATURE ENGINEERING ---
-        print("⚙️ Engineering features and translating text to math...")
+        print("Engineering features and translating text to math...")
         
         # Replace the literal text "null" with actual empty values, then fill with 0
         df = df.replace('null', np.nan)
@@ -53,7 +53,7 @@ class OperationsPipeline:
         X = df[features]
         y = df[target]
 
-        print(f"📊 analyzing {len(features)} potential features...")
+        print(f"analyzing {len(features)} potential features...")
 
         # --- 3. DYNAMIC SELECTION ---
         k_val = min(len(features), 8) # Upped to 8 since we generated more features via dummies
@@ -77,7 +77,7 @@ class OperationsPipeline:
             'target_name': target
         }, self.model_path)
         
-        print(f"✅ pipeline complete. model relies on: {selected_features}")
+        print(f"pipeline complete. model relies on: {selected_features}")
 
 # initialize the pipeline
 pipeline = OperationsPipeline()
