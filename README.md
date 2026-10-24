@@ -1,297 +1,120 @@
+# Uber Fleet Operations: Cancellation Risk Model
 
-<h1 align="center">Fleet Operations & Cancellation Prediction Engine</h1>
+Pre-dispatch cancellation classifier and booking-value analysis for the NCR (Delhi) ride-bookings dataset. Raw bookings land in SQLite, a Python pipeline cleans and encodes them, and a Random Forest scores each ride's probability of not completing. Power BI reads the same SQLite store for the operational view.
 
-<p align="center">
-  <b>An end-to-end Machine Learning pipeline and Business Intelligence suite designed to predict Uber ride cancellations before they happen, and visualize the financial impact of lost revenue for operations teams.</b>
-</p>
+## Findings
 
-<br/>
-
-<p align="center">
-  <img src="data/Dasboard.gif" alt="Power BI Dashboard Demo" width="90%" />
-</p>
-
-## 🔍 The Business Problem
-
-Ride-sharing companies lose **massive amounts of potential revenue** and operational time when dispatched rides are cancelled — whether by the driver or the customer. Every cancelled ride is a vehicle sitting idle, a customer left waiting, and revenue that evaporates from the books.
-
-**This project solves that problem at two levels:**
-
-| Layer | What It Does |
-|:------|:-------------|
-| **Predictive (ML)** | Identifies high-risk rides *before* dispatch using a trained Random Forest model, enabling preemptive re-routing or alternative assignments. |
-| **Diagnostic (BI)** | Visualizes cancellation patterns by vehicle type, time of day, and root cause — giving ops managers the *why* behind the numbers. |
-
-> The core insight: cancellation is **not random**. It's a predictable function of vehicle type, customer history, time-of-day friction, and driver availability metrics.
-
----
-
-## 📊 Key Results
+From the Power BI layer over the raw `rides` table (~150K bookings, 7 vehicle classes):
 
 | Metric | Value |
-|:-------|:------|
-| **Revenue Leakage Identified** | ~₹5M in incomplete/cancelled bookings (~8.84% of total GMV) |
-| **Highest-Friction Vehicle Class** | Auto — highest total volume *and* highest raw cancellation count |
-| **Features Selected by Model** | 8 statistically significant predictors via SelectKBest (ANOVA F-test) |
-| **Class Balancing** | SMOTE oversampling applied to correct severe class imbalance in cancellation labels |
-| **Dataset Scale** | 100,000+ historical ride records from NCR region |
+|:--|:--|
+| Booking value, status `Completed` | ₹47M (91.16%) |
+| Booking value, status `Incomplete` | ₹5M (8.84%) |
+| Highest booking volume and highest absolute cancellation count | `Auto` |
+| Model features retained | 8, ranked by ANOVA F-test |
 
----
+![Power BI dashboard](dashboards/Uber%20Statistics.png)
 
-## 🏗 Architecture
+The dashboard has two visuals: booking value split by status (pie) and booking count by vehicle type, stacked by status (bar). Status buckets are `Completed`, `Cancelled by Customer`, `Cancelled by Driver`, `Incomplete` and `No Driver Found`.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        RAW DATA LAYER                               │
-│   data/ncr_ride_bookings.csv  ──►  100K+ ride records (Kaggle)     │
-└────────────────────────┬────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     INGESTION LAYER                                 │
-│   importer.py  ──►  Reads CSV → Loads into SQLite (uber_operations)│
-└────────────────────────┬────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                   ML PIPELINE LAYER                                 │
-│   pipeline.py                                                       │
-│   ├── Data Cleaning (null scrubbing, type coercion)                │
-│   ├── Feature Engineering (one-hot encoding, datetime → hour)      │
-│   ├── Feature Selection (SelectKBest, k=8)                         │
-│   ├── Class Balancing (SMOTE)                                      │
-│   └── Model Training (RandomForestClassifier)                      │
-│        └── Exports ──► models/active_model.pkl                     │
-└────────────────────────┬────────────────────────────────────────────┘
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-┌──────────────────────┐ ┌──────────────────────────────────────────┐
-│   INFERENCE LAYER    │ │         VISUALIZATION LAYER              │
-│ predict_cancellation │ │   Power BI Dashboard (Uber.pbix)        │
-│   .py                │ │   ├── Revenue Leakage Tracker (Pie)     │
-│ ┌──────────────────┐ │ │   ├── Vehicle Friction Chart (Bar)      │
-│ │ check_ride_risk()│ │ │   └── Root Cause Matrix (Table)         │
-│ │ → Loads .pkl     │ │ │                                          │
-│ │ → Pads features  │ │ └──────────────────────────────────────────┘
-│ │ → Returns prob.  │ │
-│ └──────────────────┘ │
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│  VERIFICATION LAYER  │
-│  targeted_check.py   │
-│  → Queries SQLite    │
-│  → Runs inference    │
-│  → Validates live    │
-│    connection        │
-└──────────────────────┘
-```
-
----
-
-## 🛠 Tech Stack
-
-| Category | Technologies |
-|:---------|:-------------|
-| **Language** | Python 3 |
-| **Data Engineering** | Pandas · NumPy |
-| **Machine Learning** | Scikit-Learn (`RandomForestClassifier`, `SelectKBest`, `f_classif`) |
-| **Class Balancing** | Imbalanced-Learn (`SMOTE`) |
-| **Database** | SQLite3 |
-| **Model Serialization** | Joblib |
-| **Business Intelligence** | Power BI |
-
----
-
-## ⚡ Data Engineering Achievements
-
-The raw dataset was **heavily polluted** — a realistic scenario that mirrors production-grade data quality challenges. The pipeline includes an automated cleaning layer that handles the following:
-
-### 🧹 Null Corruption Handling
-The dataset contained **string-literal `"null"` values** instead of proper `NaN` entries. The pipeline detects and replaces these phantom nulls before any computation occurs:
-```python
-df = df.replace('null', np.nan)
-df = df.fillna(0)
-```
-
-### 🔢 Categorical-to-Numeric Translation
-Vehicle types (`Auto`, `Go Sedan`, `eBike`, etc.) are transformed via **one-hot encoding** using `pd.get_dummies()`, converting qualitative categories into binary feature columns the Random Forest can consume:
-```python
-df = pd.get_dummies(df, columns=['Vehicle Type'], drop_first=True)
-```
-
-### 🕐 Temporal Feature Extraction
-Raw timestamp strings (`HH:MM:SS`) are parsed into continuous integer `Hour` values (0–23), enabling the model to detect **time-of-day cancellation patterns**:
-```python
-df['Hour'] = pd.to_datetime(df['Time'], format='%H:%M:%S', errors='coerce').dt.hour
-```
-
-### 🎯 Target Binarization
-Natural-language booking statuses (`"Completed"`, `"Cancelled by Customer"`, etc.) are mapped into a strict binary classification target — `0` (completed) vs. `1` (cancelled/incomplete):
-```python
-df[target_col] = df[target_col].apply(
-    lambda x: 0 if str(x).strip().lower() in ['completed', 'success'] else 1
-)
-```
-
-### ⚖️ Class Imbalance Correction
-Completed rides vastly outnumber cancellations (~91% vs ~9%). **SMOTE** (Synthetic Minority Oversampling) generates synthetic cancellation examples so the model doesn't learn to blindly predict "completed" for everything:
-```python
-sm = SMOTE(random_state=42)
-X_res, y_res = sm.fit_resample(X_new, y)
-```
-
----
-
-## 📦 Module Breakdown
-
-### `importer.py` — Database Initialization
-Reads the raw CSV and securely loads it into a local SQLite database (`uber_operations.db`). Designed for idempotent re-runs — each execution fully replaces the previous dataset.
+## Data flow
 
 ```
-📂 loading new dataset...
-🔄 swapping old data for new data in the database...
-✅ database updated!
+ncr_ride_bookings.csv
+ │
+ ├── importer.py ──► uber_operations.db  (SQLite, table `rides`, raw rows)
+ │                     ├──► Power BI
+ │                     └──► targeted_check.py   SELECT rowid, * FROM rides WHERE rowid = ?
+ │                                │
+ └── pipeline.py                  ▼
+       clean → encode → select → SMOTE → fit     predict_cancellation.check_ride_risk()
+                                      │                    ▲
+                                      └──► models/active_model.pkl
 ```
 
----
+`importer.py` loads the CSV unchanged with `to_sql(if_exists="replace")`, so re-runs are idempotent. Cleaning happens only in the training path. SQLite and Power BI hold the raw records.
 
-### `pipeline.py` — Automated ML Engine
-The core training pipeline wrapped in an `OperationsPipeline` class. Executes the full ML workflow in a single call:
+## Training pipeline
 
-1. **Load** raw CSV data
-2. **Clean** corrupted null strings and coerce numeric types
-3. **Engineer** temporal and categorical features
-4. **Select** top-k features via ANOVA F-test (`SelectKBest`)
-5. **Balance** classes with SMOTE oversampling
-6. **Train** a `RandomForestClassifier` (100 estimators, max depth 10)
-7. **Serialize** the model + feature manifest to `models/active_model.pkl`
+`OperationsPipeline.auto_retrain(data_path)` in `pipeline.py`:
 
----
+| Step | Implementation |
+|:--|:--|
+| Null repair | The source encodes missing values as the string `"null"`. Replaced with `NaN`, then filled with `0`. |
+| Target | `Booking Status` → `0` for `completed`/`success`, `1` for every other status. |
+| Time feature | `Time` (`%H:%M:%S`) → integer `Hour` (0–23). Parse failures → `0`. |
+| Categorical encoding | `Vehicle Type` one-hot via `pd.get_dummies(drop_first=True)`. |
+| Type coercion | `Avg VTAT`, `Avg CTAT`, `Cancelled Rides by Customer` → `float` via `pd.to_numeric(errors="coerce")`. |
+| Candidate features | All numeric and boolean columns, minus the target and `id`, `rowid`, `time`, `unnamed: 0`. |
+| Feature selection | `SelectKBest(f_classif, k=min(n_features, 8))`. |
+| Class balancing | `SMOTE(random_state=42)`. Completed rides are the majority class. |
+| Model | `RandomForestClassifier(n_estimators=100, max_depth=10, n_jobs=-1, random_state=42)`. |
+| Artifact | `joblib.dump({"model", "features", "target_name"}, "models/active_model.pkl")`. |
 
-### `predict_cancellation.py` — Real-Time Inference
-Exposes a `check_ride_risk()` function that accepts a dictionary of ride attributes, loads the trained `.pkl` model, **dynamically pads missing variables** with neutral defaults, and outputs:
+The artifact stores the model together with its ordered feature list, so inference never depends on column order in the caller's input.
 
-- A **cancellation probability percentage**
-- A binary **risk flag** (`HIGH RISK` or `CLEAR`)
-
-```python
->>> check_ride_risk({"Hour": 18, "Avg VTAT": 12.5, "Vehicle Type_Auto": 1})
-# calculated cancellation probability: 73.40%
-# "flag: high risk of cancellation. dispatch alternative."
-```
-
----
-
-### `targeted_check.py` — Live Verification
-Queries the SQLite database for a specific ride record by row ID, extracts its features, and runs it through the inference engine. Used to validate that the full data → model → prediction pipeline is connected and functional.
-
----
-
-## 📈 Power BI Dashboard
-
-<p align="center">
-  <img src="dashboards/Uber Statistics.png" alt="Power BI Dashboard" width="90%" />
-</p>
-
-The BI layer connects directly to `uber_operations.db` and presents three core operational visuals:
-
-| Visual | Type | Insight |
-|:-------|:-----|:--------|
-| **Revenue Leakage Tracker** | Pie Chart | Compares ₹47M in completed ride value against ₹5M in leaked/cancelled value — a clear 8.84% revenue gap |
-| **Vehicle Friction Chart** | Stacked Bar | Counts rides by vehicle type, color-coded by booking status. Reveals that **Auto** and **Go Mini** carry the highest cancellation friction |
-| **Root Cause Matrix** | Table | Maps vehicle types against specific driver-side cancellation reasons, enabling targeted driver retention strategies |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Python 3.8+
-- Power BI Desktop *(for dashboard viewing)*
-
-### Installation
-
-```bash
-# 1. Clone the repository
-git clone (https://github.com/Jai2379/Uber-Fleet-Operations)
-cd Uber-Fleet-Operations
-
-# 2. Install dependencies
-pip install pandas numpy scikit-learn imbalanced-learn joblib
-
-# 3. Initialize the database
-python importer.py
-
-# 4. Train the model
-python pipeline.py
-
-# 5. Verify the pipeline
-python targeted_check.py
-
-#Kaggle Data Link: https://www.kaggle.com/datasets/yashdevladdha/uber-ride-analytics-dashboard
-#Ensure the link is under a folder named /data/
-```
-
----
-
-## 💡 Usage
-
-### Predict cancellation risk for a new ride
+## Inference
 
 ```python
 from predict_cancellation import check_ride_risk
 
-ride = {
+check_ride_risk({
     "Hour": 21,
     "Avg VTAT": 15.0,
     "Avg CTAT": 8.3,
     "Cancelled Rides by Customer": 3,
-    "Vehicle Type_Auto": 1
-}
-
-result = check_ride_risk(ride)
-print(result)
-# calculated cancellation probability: 68.20%
-# "flag: high risk of cancellation. dispatch alternative."
+    "Vehicle Type_Auto": 1,
+})
 ```
 
-### Query a specific historical ride
-
-```python
-from targeted_check import analyze_ride
-
-analyze_ride(42)
-# --- analyzing operations record id: 42 ---
-# calculated cancellation probability: 12.50%
-# "clear: ride likely to complete."
-```
-
----
-
-## 🗂 Project Structure
+`check_ride_risk` loads the artifact, pads any feature missing from the input with `0.0`, selects columns in manifest order, prints `P(cancel)` and returns one of:
 
 ```
-fleet-cancellation-engine/
-│
-├── data/
-│   ├── ncr_ride_bookings.csv        # Raw dataset (100K+ ride records)
-│  
-│
-├── dashboards/
-│   └── Uber Statistics.png          # Dashboard static screenshot
-│
-├── models/
-│   └── active_model.pkl             # Serialized trained model + feature manifest
-│
-├── importer.py                      # CSV → SQLite database loader
-├── pipeline.py                      # Full ML training pipeline
-├── predict_cancellation.py          # Real-time inference engine
-├── targeted_check.py                # Live pipeline verification script
-├── uber_operations.db               # SQLite operational database
-├── Uber.pbix                        # Power BI dashboard file
-└── README.md
+flag: high risk of cancellation. dispatch alternative.
+clear: ride likely to complete.
 ```
+
+`targeted_check.analyze_ride(rowid)` runs the same call on a stored record, fetched with a parameterized query.
+
+## Setup
+
+Python 3.8+.
+
+```bash
+git clone https://github.com/Jai2379/Uber-Fleet-Operations.git
+cd Uber-Fleet-Operations
+pip install -r requirements.txt
+```
+
+Download the dataset from [Kaggle: Uber Ride Analytics](https://www.kaggle.com/datasets/yashdevladdha/uber-ride-analytics-dashboard). The two entry points read it from different paths:
+
+| Script | Expects |
+|:--|:--|
+| `importer.py` | `./ncr_ride_bookings.csv` |
+| `pipeline.py` | `./data/ncr_ride_bookings.csv` |
+
+```bash
+python importer.py        # CSV → uber_operations.db
+python pipeline.py        # train, write models/active_model.pkl
+python targeted_check.py  # score rowid 1 end to end
+```
+
+## Layout
+
+```
+.
+├── dashboards/Uber Statistics.png   Power BI export
+├── models/active_model.pkl          trained model + feature manifest
+├── importer.py                      CSV → SQLite loader
+├── pipeline.py                      OperationsPipeline (train + serialize)
+├── predict_cancellation.py          check_ride_risk()
+├── targeted_check.py                rowid lookup → inference
+└── requirements.txt
+```
+
+## Known gaps
+
+- No held-out split. SMOTE and the fit run on the full dataset, so the repo reports no precision or recall.
+- Feature selection is fit on the same data as the model.
+- `targeted_check.py` scores raw SQLite rows, which lack the training-time `Hour` and one-hot columns. Those features are zero-padded at inference.
+- `pipeline.py` calls `auto_retrain` at module level, so importing it starts a training run.
